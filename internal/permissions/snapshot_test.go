@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	slurmv0042pb "github.com/olcf/s3m-apis/slurm/v0042"
+	statusv1alphapb "github.com/olcf/s3m-apis/status/v1alpha"
 
 	"github.com/olcf/s3m-cli/internal/proto"
 )
@@ -40,6 +41,30 @@ func TestSnapshotMatching(t *testing.T) {
 	star := New([]string{"*"}, true)
 	if !star.Can(method) {
 		t.Fatal("star scope should allow any method")
+	}
+}
+
+func TestSnapshotPublicAPIAlwaysAllowed(t *testing.T) {
+	file := statusv1alphapb.File_proto_status_v1alpha_status_proto
+	service := file.Services().ByName("Status")
+	md := service.Methods().ByName("ListResources")
+	method := proto.MethodInfo{
+		Service: service,
+		Method:  md,
+		API:     "status",
+	}
+
+	unknown := New(nil, false)
+	if !unknown.Can(method) {
+		t.Fatal("public API should be allowed even without a token")
+	}
+	if got := unknown.Label(method); got != "access allowed" {
+		t.Fatalf("expected public API label %q, got %q", "access allowed", got)
+	}
+
+	scoped := New([]string{"/olcf.s3m.slurm.v0042.SlurmIndirect/GetJobs"}, true)
+	if !scoped.Can(method) {
+		t.Fatal("public API should be allowed regardless of token scopes")
 	}
 }
 
