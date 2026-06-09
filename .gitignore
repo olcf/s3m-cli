@@ -1,0 +1,16 @@
+.DS_Store
+/.idea
+/.cache
+/.gocache
+/.go
+/.venv
+/.spack-env
+spack.lock
+
+/binaries/
+/bom/
+/cover.out
+/main
+/s3m
+/s3mcli
+/s3m-cli

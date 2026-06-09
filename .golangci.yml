@@ -1,0 +1,100 @@
+version: "2"
+
+run:
+  timeout: 2m
+  issues-exit-code: 1
+  tests: false
+
+linters:
+  default: all
+
+  disable:
+    # Disable the dependency allowlist; we are happy with existing license check mechanisms
+    - depguard
+
+    # Allow building errors dynamically
+    - err113
+
+    # Allow partial initialization of structs
+    - exhaustruct
+
+    # Allow "globals"; this linter is not currently configurable and fails even unexported package-level declarations
+    - gochecknoglobals
+
+    # Allow init() functions
+    - gochecknoinits
+
+    # Allow returning interfaces
+    - ireturn
+
+    # Allow "magic numbers" in code like `5 * time.Minute`
+    - mnd
+
+    # Allow headers like `strict-transport-security`; gRPC headers are canonically lowercase
+    - canonicalheader
+
+    # Allow return/break/continue without leading newline
+    - nlreturn
+
+    # Allow named returns
+    - nonamedreturns
+
+    # Allow unwrapped errors
+    - wrapcheck
+
+    # Always allow short variable names like `v value`
+    - varnamelen
+
+    # Allow fmt.Print* for CLI user output
+    - forbidigo
+
+    # Idiomatic Go
+    - noinlineerr
+
+    # Use wsl_v5 instead
+    - wsl
+
+  exclusions:
+    paths:
+      - s3m-apis/
+      - internal/pkg/s3m-apis/
+      - vendor/
+      - ".*mock_.*.go$"
+
+  settings:
+    gosec:
+      # Disable gosec's experimental taint-analysis rules; false positives on a client CLI
+      excludes:
+        - G703
+        - G704
+        - G705
+        - G706
+
+    cyclop:
+      max-complexity: 16
+
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+
+    gomoddirectives:
+      # Allow replace directives
+      replace-local: true
+
+    unparam:
+      check-exported: true
+
+    dupl:
+      threshold: 48 # 150 by default
+
+    misspell:
+      locale: US
+
+    revive:
+      rules:
+        - name: unused-parameter
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

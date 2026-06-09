@@ -1,0 +1,70 @@
+--- build ---
+build.time: 2026-06-09T17:16:48.256376+00:00
+build.s3m_protobuild.version: 0.1.0
+build.selector.0: common:go
+build.selector.1: slurm/v0042:go
+build.selector.2: slurm/v0043:go
+build.selector.3: status/v1alpha:go
+build.selector.4: storage/v1alpha:go
+build.selector.5: streaming/v1alpha:go
+build.selector.6: tms/v1:go
+build.artifact.0.key: s3m-apis:go
+build.artifact.1.key: combined:descriptor
+
+--- source: s3m-apis ---
+source.module.version: 0.3.4
+source.module.go_package: github.com/olcf/s3m-apis
+source.git.commit: e34fd25055d1e47a6abd71642c1687830d9ed7dc
+source.git.commit_time: 2026-05-01 13:17:48 -0400
+source.git.dirty: false
+source.git.untracked: false
+
+--- tooling ---
+tooling.protoc.version: libprotoc 33.1
+tooling.go.version: go version go1.26.4 darwin/arm64
+tooling.go.module.cel.dev/expr: v0.25.1
+tooling.go.module.cloud.google.com/go/compute/metadata: v0.9.0
+tooling.go.module.github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp: v1.31.0
+tooling.go.module.github.com/antihax/optional: v1.0.0
+tooling.go.module.github.com/cespare/xxhash/v2: v2.3.0
+tooling.go.module.github.com/cncf/xds/go: v0.0.0-20260202195803-dba9d589def2
+tooling.go.module.github.com/envoyproxy/go-control-plane: v0.14.0
+tooling.go.module.github.com/envoyproxy/go-control-plane/envoy: v1.37.0
+tooling.go.module.github.com/envoyproxy/go-control-plane/ratelimit: v0.1.0
+tooling.go.module.github.com/envoyproxy/protoc-gen-validate: v1.3.3
+tooling.go.module.github.com/go-jose/go-jose/v4: v4.1.4
+tooling.go.module.github.com/go-logr/logr: v1.4.3
+tooling.go.module.github.com/go-logr/stdr: v1.2.2
+tooling.go.module.github.com/golang/glog: v1.2.5
+tooling.go.module.github.com/golang/protobuf: v1.5.4
+tooling.go.module.github.com/google/go-cmp: v0.7.0
+tooling.go.module.github.com/google/uuid: v1.6.0
+tooling.go.module.github.com/grpc-ecosystem/grpc-gateway/v2: v2.29.0
+tooling.go.module.github.com/kr/pretty: v0.3.1
+tooling.go.module.github.com/planetscale/vtprotobuf: v0.6.1-0.20240319094008-0393e58bdf10
+tooling.go.module.github.com/rogpeppe/fastuuid: v1.2.0
+tooling.go.module.github.com/spiffe/go-spiffe/v2: v2.6.0
+tooling.go.module.go.opentelemetry.io/auto/sdk: v1.2.1
+tooling.go.module.go.opentelemetry.io/contrib/detectors/gcp: v1.42.0
+tooling.go.module.go.opentelemetry.io/otel: v1.43.0
+tooling.go.module.go.opentelemetry.io/otel/metric: v1.43.0
+tooling.go.module.go.opentelemetry.io/otel/sdk: v1.43.0
+tooling.go.module.go.opentelemetry.io/otel/sdk/metric: v1.43.0
+tooling.go.module.go.opentelemetry.io/otel/trace: v1.43.0
+tooling.go.module.go.yaml.in/yaml/v3: v3.0.4
+tooling.go.module.golang.org/x/crypto: v0.48.0
+tooling.go.module.golang.org/x/mod: v0.34.0
+tooling.go.module.golang.org/x/net: v0.51.0
+tooling.go.module.golang.org/x/oauth2: v0.36.0
+tooling.go.module.golang.org/x/sync: v0.20.0
+tooling.go.module.golang.org/x/sys: v0.42.0
+tooling.go.module.golang.org/x/term: v0.40.0
+tooling.go.module.golang.org/x/text: v0.36.0
+tooling.go.module.golang.org/x/tools: v0.43.0
+tooling.go.module.gonum.org/v1/gonum: v0.17.0
+tooling.go.module.google.golang.org/genproto/googleapis/api: v0.0.0-20260608224507-4308a22a1bab
+tooling.go.module.google.golang.org/genproto/googleapis/rpc: v0.0.0-20260526163538-3dc84a4a5aaa
+tooling.go.module.google.golang.org/grpc: v1.81.1
+tooling.go.module.google.golang.org/protobuf: v1.36.11
+tooling.go.module.gopkg.in/check.v1: v1.0.0-20201130134442-10cb98267c6c
+
