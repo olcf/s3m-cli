@@ -12,6 +12,17 @@ type Snapshot struct {
 	allowed map[string]struct{}
 }
 
+// publicAPIs are reachable by every request, including unauthenticated ones,
+// because SEAS bypasses auth for them. Keep in sync with e.g. SEAS bypass_auth.
+var publicAPIs = map[string]struct{}{
+	"status": {},
+}
+
+func alwaysAllowed(m proto.MethodInfo) bool {
+	_, ok := publicAPIs[m.API]
+	return ok
+}
+
 func New(scopes []string, known bool) Snapshot {
 	allowed := make(map[string]struct{}, len(scopes))
 
@@ -36,6 +47,10 @@ func New(scopes []string, known bool) Snapshot {
 }
 
 func (s Snapshot) Can(m proto.MethodInfo) bool {
+	if alwaysAllowed(m) {
+		return true
+	}
+
 	if !s.Known {
 		return false
 	}
@@ -56,12 +71,12 @@ func (s Snapshot) Can(m proto.MethodInfo) bool {
 }
 
 func (s Snapshot) Label(m proto.MethodInfo) string {
-	if !s.Known {
-		return "access unknown"
-	}
-
 	if s.Can(m) {
 		return "access allowed"
+	}
+
+	if !s.Known {
+		return "access unknown"
 	}
 
 	return "no access"
