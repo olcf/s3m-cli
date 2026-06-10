@@ -149,7 +149,7 @@ jobs:
             arch="$2"
             ext="${3:-}"
             pkg="s3m-${os}-${arch}"
-            bin="${pkg}${ext}"
+            bin="s3m-cli${ext}"
             echo "Building ${bin}"
             GOOS="${os}" GOARCH="${arch}" GOFLAGS="-mod=vendor" go build -trimpath -o "release/${bin}" ./cmd/main
             tar -C release -czf "release/${pkg}.tar.gz" "${bin}"
