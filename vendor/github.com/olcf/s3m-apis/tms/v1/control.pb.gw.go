@@ -42,6 +42,9 @@ func request_TokenControl_IntrospectAuthToken_0(ctx context.Context, marshaler r
 		protoReq IntrospectAuthTokenRequest
 		metadata runtime.ServerMetadata
 	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -74,6 +77,9 @@ func request_TokenControl_IntrospectAuthToken_1(ctx context.Context, marshaler r
 		protoReq IntrospectAuthTokenRequest
 		metadata runtime.ServerMetadata
 	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
 	if err := req.ParseForm(); err != nil {
 		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
@@ -104,6 +110,9 @@ func request_TokenControl_RevokeAuthToken_0(ctx context.Context, marshaler runti
 		protoReq RevokeAuthTokenRequest
 		metadata runtime.ServerMetadata
 	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
 	msg, err := client.RevokeAuthToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
@@ -122,6 +131,9 @@ func request_TokenControl_RevokeAuthToken_1(ctx context.Context, marshaler runti
 		protoReq RevokeAuthTokenRequest
 		metadata runtime.ServerMetadata
 	)
+	if req.Body != nil {
+		_, _ = io.Copy(io.Discard, req.Body)
+	}
 	msg, err := client.RevokeAuthToken(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
 	return msg, metadata, err
 }
