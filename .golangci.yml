@@ -12,6 +12,12 @@ linters:
     # Disable the dependency allowlist; we are happy with existing license check mechanisms
     - depguard
 
+    # Deprecated; superseded by gomodguard_v2, which we leave enabled but unconfigured
+    - gomodguard
+
+    # Repeated strings here are declarative JSON-Schema vocabulary; constants hurt readability
+    - goconst
+
     # Allow building errors dynamically
     - err113
 
