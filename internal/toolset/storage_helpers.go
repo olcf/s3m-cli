@@ -159,8 +159,8 @@ func responseTotalSize(resp *http.Response) int64 {
 	if cr := resp.Header.Get("Content-Range"); cr != "" {
 		var totalSize int64
 
-		if idx := strings.LastIndex(cr, "/"); idx != -1 {
-			_, _ = fmt.Sscanf(cr[idx+1:], "%d", &totalSize)
+		if _, size, ok := strings.CutLast(cr, "/"); ok {
+			_, _ = fmt.Sscanf(size, "%d", &totalSize)
 		}
 
 		if totalSize != 0 {

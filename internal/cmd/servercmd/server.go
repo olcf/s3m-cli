@@ -170,50 +170,17 @@ func newStatelessMCPHTTPHandler(
 		once   sync.Once
 		server *mcp.Server
 	}
+
 	type requestServerKey struct{}
-
-	buildServer := func(r *http.Request) *mcp.Server {
-		token := grpcclient.TokenFromAuthorizationHeader(r.Header.Get("Authorization"))
-
-		logMCPServerFactory(r, token)
-
-		perms := cache.GetPermissions(r.Context(), token)
-		allowed := filterAllowed(perms, rt.Methods)
-
-		ts := buildToolSet(rt, allowed, conn, cache.Vars)
-
-		srv := mcp.NewServer(&mcp.Implementation{
-			Name:    "s3m",
-			Version: buildinfo.Version,
-		}, nil)
-
-		for _, spec := range ts.MCP {
-			// Wrap handler to inject auth token into context.
-			// The MCP framework doesn't propagate HTTP request context values to tool handlers,
-			// so we need to explicitly inject the token for gRPC calls to be authenticated.
-			originalHandler := spec.Handler
-			capturedToken := token // explicit capture for closure
-			wrappedHandler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-				logMCPToolHandler(ctx, req, capturedToken)
-
-				ctx = grpcclient.ContextWithAuthToken(ctx, capturedToken)
-
-				return originalHandler(ctx, req)
-			}
-			srv.AddTool(spec.Tool, wrappedHandler)
-		}
-
-		return srv
-	}
 
 	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		state, ok := r.Context().Value(requestServerKey{}).(*requestServer)
 		if !ok {
-			return buildServer(r)
+			return buildStatelessMCPServer(rt, conn, cache, r)
 		}
 
 		state.once.Do(func() {
-			state.server = buildServer(r)
+			state.server = buildStatelessMCPServer(rt, conn, cache, r)
 		})
 
 		return state.server
@@ -235,6 +202,42 @@ func newStatelessMCPHTTPHandler(
 	return wrapWithAuthTokenExtraction(requestHandler)
 }
 
+func buildStatelessMCPServer(
+	rt *runtime.Runtime,
+	conn *grpc.ClientConn,
+	cache *tokenCache,
+	r *http.Request,
+) *mcp.Server {
+	token := grpcclient.TokenFromAuthorizationHeader(r.Header.Get("Authorization"))
+
+	logMCPServerFactory(r, token)
+
+	perms := cache.GetPermissions(r.Context(), token)
+	allowed := filterAllowed(perms, rt.Methods)
+
+	ts := buildToolSet(rt, allowed, conn, cache.Vars)
+
+	srv := mcp.NewServer(&mcp.Implementation{
+		Name:    "s3m",
+		Version: buildinfo.Version,
+	}, nil)
+
+	for _, spec := range ts.MCP {
+		originalHandler := spec.Handler
+		capturedToken := token
+		wrappedHandler := func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			logMCPToolHandler(ctx, req, capturedToken)
+
+			ctx = grpcclient.ContextWithAuthToken(ctx, capturedToken)
+
+			return originalHandler(ctx, req)
+		}
+		srv.AddTool(spec.Tool, wrappedHandler)
+	}
+
+	return srv
+}
+
 func validStatelessMCPRequest(w http.ResponseWriter, r *http.Request) bool {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -251,6 +254,7 @@ func validStatelessMCPRequest(w http.ResponseWriter, r *http.Request) bool {
 	}
 
 	var jsonOK, streamOK bool
+
 	for _, value := range r.Header.Values("Accept") {
 		for raw := range strings.SplitSeq(value, ",") {
 			base, _, _ := strings.Cut(strings.TrimSpace(raw), ";")

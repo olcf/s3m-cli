@@ -172,6 +172,7 @@ func (c *tokenCache) recordForToken(ctx context.Context, token string) (auth.Tok
 	c.mu.Lock()
 	pending.record = rec
 	pending.ok = ok
+
 	delete(c.inflight, token)
 	close(pending.done)
 	c.mu.Unlock()

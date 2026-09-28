@@ -459,12 +459,15 @@ func (h *docHandlers) handleSearch(ctx context.Context, input docSearchRequest) 
 	if strings.TrimSpace(input.Query) == "" && len(input.Tags) == 0 {
 		return nil, errors.New("provide query or tags")
 	}
+
 	if utf8.RuneCountInString(input.Query) > maxDocSearchQueryLength {
 		return nil, fmt.Errorf("query must be at most %d characters", maxDocSearchQueryLength)
 	}
+
 	if len(input.Tags) > maxDocSearchTags {
 		return nil, fmt.Errorf("provide at most %d tags", maxDocSearchTags)
 	}
+
 	for _, tag := range input.Tags {
 		if utf8.RuneCountInString(tag) > maxDocSearchTagLength {
 			return nil, fmt.Errorf("tags must be at most %d characters", maxDocSearchTagLength)
@@ -486,8 +489,10 @@ func (h *docHandlers) handleSearch(ctx context.Context, input docSearchRequest) 
 		input.Offset = 0
 	}
 
-	var matches []docs.DocMatch
-	var more bool
+	var (
+		matches []docs.DocMatch
+		more    bool
+	)
 
 	if h.visibleTools != nil {
 		allMatches, _ := store.SearchDocs(input.Query, input.Tags, len(store.Docs), 0)
