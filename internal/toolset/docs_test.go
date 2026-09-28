@@ -75,6 +75,58 @@ func TestDocSearchToolAcceptsQueryOrTags(t *testing.T) {
 	}
 }
 
+func TestDocSearchToolRejectsOversizedInputs(t *testing.T) {
+	store := loadDocStore(t, "alpha")
+	ts := BuildDocToolSet(func() *docs.Store { return store }, nil, nil)
+	spec := findMCPToolSpec(t, ts, "doc_search")
+
+	tests := []struct {
+		name    string
+		request docSearchRequest
+		want    string
+	}{
+		{
+			name:    "query",
+			request: docSearchRequest{Query: strings.Repeat("x", maxDocSearchQueryLength+1)},
+			want:    "query must be at most",
+		},
+		{
+			name:    "tag count",
+			request: docSearchRequest{Tags: make([]string, maxDocSearchTags+1)},
+			want:    "provide at most",
+		},
+		{
+			name:    "tag length",
+			request: docSearchRequest{Tags: []string{strings.Repeat("x", maxDocSearchTagLength+1)}},
+			want:    "tags must be at most",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			arguments, err := json.Marshal(tt.request)
+			if err != nil {
+				t.Fatalf("marshal request: %v", err)
+			}
+
+			result, err := spec.Handler(context.Background(), &mcp.CallToolRequest{
+				Params: &mcp.CallToolParamsRaw{Arguments: arguments},
+			})
+			if err != nil {
+				t.Fatalf("doc_search handler error: %v", err)
+			}
+			if !result.IsError {
+				t.Fatalf("expected oversized input to fail, got %+v", result)
+			}
+
+			text := result.Content[0].(*mcp.TextContent).Text
+			if !strings.Contains(text, tt.want) {
+				t.Fatalf("expected error containing %q, got %q", tt.want, text)
+			}
+		})
+	}
+}
+
 func TestDocLookupHidesDocsThatOnlyApplyToHiddenTools(t *testing.T) {
 	store := loadDocStoreWithDocs(t,
 		map[string]docFixture{

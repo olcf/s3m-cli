@@ -2,6 +2,7 @@ package servercmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,69 @@ import (
 	"github.com/olcf/s3m-cli/internal/proto"
 	"github.com/olcf/s3m-cli/internal/runtime"
 )
+
+func TestStatelessMCPHTTPHandlerBuildsServerOncePerRequest(t *testing.T) {
+	rt := &runtime.Runtime{}
+	cache := newTokenCache(rt)
+
+	var introspections int
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		introspections++
+
+		return auth.TokenRecord{}, errors.New("invalid token")
+	}
+
+	handler := newStatelessMCPHTTPHandler(rt, nil, cache)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	if introspections != 1 {
+		t.Fatalf("expected one introspection per HTTP request, got %d", introspections)
+	}
+}
+
+func TestStatelessMCPHTTPHandlerRejectsInvalidTransportBeforeIntrospection(t *testing.T) {
+	rt := &runtime.Runtime{}
+	cache := newTokenCache(rt)
+
+	var introspections int
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		introspections++
+
+		return auth.TokenRecord{}, errors.New("invalid token")
+	}
+
+	handler := newStatelessMCPHTTPHandler(rt, nil, cache)
+	tests := []struct {
+		name        string
+		method      string
+		contentType string
+		accept      string
+	}{
+		{name: "method", method: http.MethodGet, contentType: "application/json", accept: "*/*"},
+		{name: "content type", method: http.MethodPost, contentType: "text/plain", accept: "*/*"},
+		{name: "accept", method: http.MethodPost, contentType: "application/json", accept: "application/json"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/", strings.NewReader(`{}`))
+			req.Header.Set("Authorization", "Bearer invalid-token")
+			req.Header.Set("Content-Type", tt.contentType)
+			req.Header.Set("Accept", tt.accept)
+
+			handler.ServeHTTP(httptest.NewRecorder(), req)
+		})
+	}
+
+	if introspections != 0 {
+		t.Fatalf("expected invalid transport requests to skip introspection, got %d calls", introspections)
+	}
+}
 
 func TestStatelessMCPHTTPHandlerUsesBearerForVisibleDocs(t *testing.T) {
 	file := slurmv0042pb.File_proto_slurm_v0042_slurm_proto

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"mime"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -74,7 +77,7 @@ func BuildMCPCommand(rt *runtime.Runtime) *cli.Command {
 
 				defer closeConn(conn)
 
-				cache := newTokenCache(rt)
+				cache := newTokenCache(rt, conn)
 				handler := newStatelessMCPHTTPHandler(rt, conn, cache)
 
 				addr := c.String("http-addr")
@@ -101,7 +104,7 @@ func BuildMCPCommand(rt *runtime.Runtime) *cli.Command {
 
 			defer closeConn(conn)
 
-			cache := newTokenCache(rt)
+			cache := newTokenCache(rt, conn)
 
 			server := mcp.NewServer(&mcp.Implementation{
 				Name:    "s3m",
@@ -163,7 +166,13 @@ func newStatelessMCPHTTPHandler(
 	conn *grpc.ClientConn,
 	cache *tokenCache,
 ) http.Handler {
-	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+	type requestServer struct {
+		once   sync.Once
+		server *mcp.Server
+	}
+	type requestServerKey struct{}
+
+	buildServer := func(r *http.Request) *mcp.Server {
 		token := grpcclient.TokenFromAuthorizationHeader(r.Header.Get("Authorization"))
 
 		logMCPServerFactory(r, token)
@@ -195,12 +204,75 @@ func newStatelessMCPHTTPHandler(
 		}
 
 		return srv
+	}
+
+	streamableHandler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		state, ok := r.Context().Value(requestServerKey{}).(*requestServer)
+		if !ok {
+			return buildServer(r)
+		}
+
+		state.once.Do(func() {
+			state.server = buildServer(r)
+		})
+
+		return state.server
 	}, &mcp.StreamableHTTPOptions{
 		Stateless:      true,
 		SessionTimeout: cmd.MCPSessionTimeout,
 	})
 
-	return wrapWithAuthTokenExtraction(handler)
+	requestHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !validStatelessMCPRequest(w, r) {
+			return
+		}
+
+		state := &requestServer{}
+		ctx := context.WithValue(r.Context(), requestServerKey{}, state)
+		streamableHandler.ServeHTTP(w, r.WithContext(ctx))
+	})
+
+	return wrapWithAuthTokenExtraction(requestHandler)
+}
+
+func validStatelessMCPRequest(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+
+		return false
+	}
+
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		http.Error(w, "Content-Type must be 'application/json'", http.StatusUnsupportedMediaType)
+
+		return false
+	}
+
+	var jsonOK, streamOK bool
+	for _, value := range r.Header.Values("Accept") {
+		for raw := range strings.SplitSeq(value, ",") {
+			base, _, _ := strings.Cut(strings.TrimSpace(raw), ";")
+			switch strings.ToLower(strings.TrimSpace(base)) {
+			case "application/json", "application/*":
+				jsonOK = true
+			case "text/event-stream", "text/*":
+				streamOK = true
+			case "*/*":
+				jsonOK = true
+				streamOK = true
+			}
+		}
+	}
+
+	if !jsonOK || !streamOK {
+		http.Error(w, "Accept must contain both 'application/json' and 'text/event-stream'", http.StatusBadRequest)
+
+		return false
+	}
+
+	return true
 }
 
 //nolint:funlen
@@ -243,7 +315,7 @@ func BuildOpenAPICommand(rt *runtime.Runtime) *cli.Command {
 
 			defer closeConn(conn)
 
-			cache := newTokenCache(rt)
+			cache := newTokenCache(rt, conn)
 			ts := buildToolSet(rt, allowed, conn, cache.Vars)
 
 			mux := http.NewServeMux()

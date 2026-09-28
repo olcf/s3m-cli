@@ -10,6 +10,7 @@ import (
 
 	"github.com/olcf/s3m-cli/internal/auth"
 	grpcclient "github.com/olcf/s3m-cli/internal/grpc"
+	"github.com/olcf/s3m-cli/internal/permissions"
 	"github.com/olcf/s3m-cli/internal/runtime"
 )
 
@@ -216,6 +217,53 @@ func TestGetPermissionsReturnsUnknownWhenIntrospectionFails(t *testing.T) {
 
 	if perms.Known {
 		t.Fatal("expected failed introspection to leave permissions unknown")
+	}
+}
+
+func TestTokenCacheCoalescesConcurrentIntrospection(t *testing.T) {
+	rt := &runtime.Runtime{Target: "unused-target"}
+	cache := newTokenCache(rt)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	var mu sync.Mutex
+	var calls int
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		mu.Lock()
+		calls++
+		if calls == 1 {
+			close(started)
+		}
+		mu.Unlock()
+
+		<-release
+
+		return auth.TokenRecord{Token: "shared-token", Scopes: []string{"/test/*"}}, nil
+	}
+
+	const goroutines = 8
+	results := make(chan permissions.Snapshot, goroutines)
+	for range goroutines {
+		go func() {
+			results <- cache.GetPermissions(context.Background(), "shared-token")
+		}()
+	}
+
+	<-started
+	close(release)
+
+	for range goroutines {
+		if result := <-results; !result.Known {
+			t.Fatal("expected coalesced introspection result to be known")
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if calls != 1 {
+		t.Fatalf("expected one concurrent introspection, got %d", calls)
 	}
 }
 

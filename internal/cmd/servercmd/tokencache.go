@@ -13,6 +13,7 @@ import (
 	grpcclient "github.com/olcf/s3m-cli/internal/grpc"
 	"github.com/olcf/s3m-cli/internal/permissions"
 	"github.com/olcf/s3m-cli/internal/runtime"
+	"google.golang.org/grpc"
 )
 
 // tokenCache caches introspected token records with TTL-based expiration.
@@ -24,6 +25,7 @@ type tokenCache struct {
 	mu         sync.RWMutex
 	cache      map[string]*tokenCacheEntry
 	order      *list.List
+	inflight   map[string]*tokenLookup
 }
 
 type tokenCacheEntry struct {
@@ -32,16 +34,39 @@ type tokenCacheEntry struct {
 	element   *list.Element
 }
 
+type tokenLookup struct {
+	done   chan struct{}
+	record auth.TokenRecord
+	ok     bool
+}
+
 const tokenCacheTTL = 2 * time.Hour
 const tokenCacheMaxEntries = 2048
 
-func newTokenCache(rt *runtime.Runtime) *tokenCache {
-	return &tokenCache{
+func newTokenCache(rt *runtime.Runtime, connections ...grpc.ClientConnInterface) *tokenCache {
+	cache := &tokenCache{
 		rt:         rt,
 		introspect: introspectTokenRecord,
 		cache:      make(map[string]*tokenCacheEntry),
 		order:      list.New(),
+		inflight:   make(map[string]*tokenLookup),
 	}
+
+	if len(connections) > 0 && connections[0] != nil {
+		conn := connections[0]
+		cache.introspect = func(
+			ctx context.Context, _ *runtime.Runtime, token string,
+		) (auth.TokenRecord, error) {
+			res := auth.IntrospectTokenWithConn(ctx, conn, token, cmd.GRPCCallTimeout)
+			if res.Err != nil {
+				return auth.TokenRecord{}, res.Err
+			}
+
+			return res.Record, nil
+		}
+	}
+
+	return cache
 }
 
 func introspectTokenRecord(
@@ -122,6 +147,39 @@ func (c *tokenCache) recordForToken(ctx context.Context, token string) (auth.Tok
 		return auth.TokenRecord{}, false
 	}
 
+	if cached, ok := c.loadCachedRecord(token); ok {
+		return cached, true
+	}
+
+	c.mu.Lock()
+	if pending, ok := c.inflight[token]; ok {
+		c.mu.Unlock()
+
+		select {
+		case <-pending.done:
+			return pending.record, pending.ok
+		case <-ctx.Done():
+			return auth.TokenRecord{}, false
+		}
+	}
+
+	pending := &tokenLookup{done: make(chan struct{})}
+	c.inflight[token] = pending
+	c.mu.Unlock()
+
+	rec, ok := c.lookupToken(ctx, token)
+
+	c.mu.Lock()
+	pending.record = rec
+	pending.ok = ok
+	delete(c.inflight, token)
+	close(pending.done)
+	c.mu.Unlock()
+
+	return rec, ok
+}
+
+func (c *tokenCache) lookupToken(ctx context.Context, token string) (auth.TokenRecord, bool) {
 	if cached, ok := c.loadCachedRecord(token); ok {
 		return cached, true
 	}

@@ -175,7 +175,14 @@ func wrapWithAuthTokenExtraction(handler http.Handler) http.Handler {
 			return
 		}
 
-		token := grpcclient.TokenFromAuthorizationHeader(r.Header.Get("Authorization"))
+		authorization := r.Header.Get("Authorization")
+		if len(authorization) > maxAuthorizationHeaderBytes {
+			http.Error(w, "Authorization header too large", http.StatusRequestHeaderFieldsTooLarge)
+
+			return
+		}
+
+		token := grpcclient.TokenFromAuthorizationHeader(authorization)
 
 		logAuthTokenExtraction(r, token)
 
@@ -190,6 +197,8 @@ func wrapWithAuthTokenExtraction(handler http.Handler) http.Handler {
 		handler.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+const maxAuthorizationHeaderBytes = 16 << 10
 
 func registerStatelessOpenAPIHandlers(
 	mux *http.ServeMux,
