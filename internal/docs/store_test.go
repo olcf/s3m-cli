@@ -102,6 +102,24 @@ func TestSearchDocsScoresAndFilters(t *testing.T) {
 	}
 }
 
+func TestSearchDocsCapsQueryTokens(t *testing.T) {
+	tokens := make([]string, maxSearchQueryTokens+1)
+	for i := range maxSearchQueryTokens {
+		tokens[i] = "missing" + strings.Repeat("x", i)
+	}
+	tokens[maxSearchQueryTokens] = "kittens"
+
+	store := newTestStore(nil)
+	doc := &Doc{ID: "a", Title: "Alpha", Body: "Kittens everywhere"}
+	doc.Sections = splitDocSections(doc)
+	store.registerDoc(doc, nil)
+
+	results, _ := store.SearchDocs(strings.Join(tokens, " "), nil, 3, 0)
+	if len(results) != 0 {
+		t.Fatalf("expected tokens after the cap to be ignored, got %+v", results)
+	}
+}
+
 func TestProcessDocContentFailsForUnknownTool(t *testing.T) {
 	store := newTestStore([]methodTarget{{
 		ToolName:    "alpha",

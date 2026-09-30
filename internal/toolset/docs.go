@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -21,6 +22,12 @@ import (
 // Types
 
 type DocStoreGetter func() *docs.Store
+
+const (
+	maxDocSearchQueryLength = 1024
+	maxDocSearchTags        = 32
+	maxDocSearchTagLength   = 128
+)
 
 type docHandlers struct {
 	getStore     DocStoreGetter
@@ -453,6 +460,20 @@ func (h *docHandlers) handleSearch(ctx context.Context, input docSearchRequest) 
 		return nil, errors.New("provide query or tags")
 	}
 
+	if utf8.RuneCountInString(input.Query) > maxDocSearchQueryLength {
+		return nil, fmt.Errorf("query must be at most %d characters", maxDocSearchQueryLength)
+	}
+
+	if len(input.Tags) > maxDocSearchTags {
+		return nil, fmt.Errorf("provide at most %d tags", maxDocSearchTags)
+	}
+
+	for _, tag := range input.Tags {
+		if utf8.RuneCountInString(tag) > maxDocSearchTagLength {
+			return nil, fmt.Errorf("tags must be at most %d characters", maxDocSearchTagLength)
+		}
+	}
+
 	store := h.getStore()
 	if store == nil {
 		return nil, errors.New("docs not available")
@@ -468,10 +489,16 @@ func (h *docHandlers) handleSearch(ctx context.Context, input docSearchRequest) 
 		input.Offset = 0
 	}
 
-	matches, more := store.SearchDocs(input.Query, input.Tags, input.Limit, input.Offset)
+	var (
+		matches []docs.DocMatch
+		more    bool
+	)
+
 	if h.visibleTools != nil {
 		allMatches, _ := store.SearchDocs(input.Query, input.Tags, len(store.Docs), 0)
 		matches, more = paginateVisibleDocMatches(h.filterDocMatches(allMatches), input.Limit, input.Offset)
+	} else {
+		matches, more = store.SearchDocs(input.Query, input.Tags, input.Limit, input.Offset)
 	}
 
 	vars := h.currentVars(ctx)
@@ -738,6 +765,7 @@ var (
 			"query": map[string]any{
 				"type":        "string",
 				"minLength":   1,
+				"maxLength":   maxDocSearchQueryLength,
 				"pattern":     `.*\S.*`,
 				"description": "Keywords to search for.",
 			},
@@ -755,8 +783,10 @@ var (
 			"tags": map[string]any{
 				"type":     "array",
 				"minItems": 1,
+				"maxItems": maxDocSearchTags,
 				"items": map[string]any{
 					"type":        "string",
+					"maxLength":   maxDocSearchTagLength,
 					"description": "Filter results to docs containing these tags.",
 				},
 			},

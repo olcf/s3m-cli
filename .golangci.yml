@@ -23,6 +23,7 @@ linters:
 
     # Allow partial initialization of structs
     - exhaustruct
+    - exhaustruct_v5
 
     # Allow "globals"; this linter is not currently configurable and fails even unexported package-level declarations
     - gochecknoglobals

@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const maxSearchQueryTokens = 32
+
 //
 // Lookup
 
@@ -173,6 +175,9 @@ func tokenizeQuery(query string) []string {
 		uniq[f] = struct{}{}
 
 		tokens = append(tokens, f)
+		if len(tokens) == maxSearchQueryTokens {
+			break
+		}
 	}
 
 	return tokens

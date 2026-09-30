@@ -146,6 +146,23 @@ func TestWrapWithAuthTokenExtractionMissingHeader(t *testing.T) {
 	}
 }
 
+func TestWrapWithAuthTokenExtractionRejectsOversizedHeader(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})
+
+	handler := wrapWithAuthTokenExtraction(inner)
+	req := httptest.NewRequest(http.MethodPost, "/", nil)
+	req.Header.Set("Authorization", strings.Repeat("x", maxAuthorizationHeaderBytes+1))
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("expected status 431, got %d", rr.Code)
+	}
+}
+
 func TestWrapWithAuthTokenExtractionOptionsPassthrough(t *testing.T) {
 	called := false
 

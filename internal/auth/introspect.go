@@ -8,6 +8,7 @@ import (
 	"time"
 
 	tmspb "github.com/olcf/s3m-apis/tms/v1"
+	"google.golang.org/grpc"
 
 	grpcclient "github.com/olcf/s3m-cli/internal/grpc"
 	"github.com/olcf/s3m-cli/internal/util"
@@ -21,17 +22,15 @@ type IntrospectionResult struct {
 func IntrospectToken(
 	ctx context.Context, target, token string, connectTimeout, callTimeout time.Duration, debug bool,
 ) IntrospectionResult {
-	res := IntrospectionResult{
-		Record: TokenRecord{
-			Token: token,
-		},
-	}
-
 	conn, err := grpcclient.DialAndWait(ctx, target, token, connectTimeout, debug)
 	if err != nil {
-		res.Err = fmt.Errorf("dial token control: %w", err)
-		return res
+		return IntrospectionResult{
+			Record: TokenRecord{Token: token},
+			Err:    fmt.Errorf("dial token control: %w", err),
+		}
 	}
+
+	res := IntrospectTokenWithConn(ctx, conn, token, callTimeout)
 
 	defer func() {
 		if closeErr := conn.Close(); closeErr != nil && res.Err == nil {
@@ -39,10 +38,24 @@ func IntrospectToken(
 		}
 	}()
 
+	return res
+}
+
+func IntrospectTokenWithConn(
+	ctx context.Context, conn grpc.ClientConnInterface, token string, callTimeout time.Duration,
+) IntrospectionResult {
+	res := IntrospectionResult{
+		Record: TokenRecord{
+			Token: token,
+		},
+	}
+
 	client := tmspb.NewTokenControlClient(conn)
 
 	callCtx, cancel := context.WithTimeout(ctx, callTimeout)
 	defer cancel()
+
+	callCtx = grpcclient.ContextWithAuthToken(callCtx, token)
 
 	resp, err := client.IntrospectAuthToken(callCtx, &tmspb.IntrospectAuthTokenRequest{
 		GrpcPermissions: true,
