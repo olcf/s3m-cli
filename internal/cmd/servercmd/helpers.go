@@ -168,38 +168,6 @@ func prepareStatelessConnection(
 	return allowed, conn, nil
 }
 
-func wrapWithAuthTokenExtraction(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions {
-			handler.ServeHTTP(w, r)
-			return
-		}
-
-		authorization := r.Header.Get("Authorization")
-		if len(authorization) > maxAuthorizationHeaderBytes {
-			http.Error(w, "Authorization header too large", http.StatusRequestHeaderFieldsTooLarge)
-
-			return
-		}
-
-		token := grpcclient.TokenFromAuthorizationHeader(authorization)
-
-		logAuthTokenExtraction(r, token)
-
-		if token == "" {
-			logMissingAuthorization(r)
-			http.Error(w, "missing Authorization header", http.StatusUnauthorized)
-
-			return
-		}
-
-		ctx := grpcclient.ContextWithAuthToken(r.Context(), token)
-		handler.ServeHTTP(w, r.WithContext(ctx))
-	})
-}
-
-const maxAuthorizationHeaderBytes = 16 << 10
-
 func registerStatelessOpenAPIHandlers(
 	mux *http.ServeMux,
 	routes []toolset.HTTPRouteSpec,

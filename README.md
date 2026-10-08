@@ -112,6 +112,8 @@ To serve over HTTP and take the S3M token from each incoming request's `Authoriz
 s3m mcp --http --stateless-auth
 ```
 
+The public S3M MCP server is available at `https://s3m.olcf.ornl.gov/olcf/open/mcp`. Until it receives a token with usable S3M service scopes, it only exposes one tool describing how to create an S3M token in [myOLCF](https://my.olcf.ornl.gov/) and configure the server. Create a token with the scopes for the S3M services you want to use, then configure your MCP client to connect to the endpoint with `Authorization: <token>`.
+
 The S3M CLI also serves documentation tools via MCP and OpenAPI, to help AI agents understand how to use the other tools. These are populated from a docs archive fetched over HTTP (`--docs-url`, default the public `olcf/s3m-mcp-docs` archive).
 
 
