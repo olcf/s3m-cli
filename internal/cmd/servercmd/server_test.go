@@ -82,7 +82,83 @@ func TestStatelessMCPHTTPHandlerRejectsInvalidTransportBeforeIntrospection(t *te
 	}
 }
 
-func TestStatelessMCPHTTPHandlerUsesBearerForVisibleDocs(t *testing.T) {
+func TestStatelessMCPHTTPHandlerRejectsOversizedAuthorizationBeforeIntrospection(t *testing.T) {
+	rt := &runtime.Runtime{}
+	cache := newTokenCache(rt)
+
+	var introspections int
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		introspections++
+
+		return auth.TokenRecord{}, errors.New("invalid token")
+	}
+
+	handler := newStatelessMCPHTTPHandler(rt, nil, cache)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("Authorization", strings.Repeat("x", maxAuthorizationHeaderBytes+1))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	recorder := httptest.NewRecorder()
+
+	handler.ServeHTTP(recorder, req)
+
+	if recorder.Code != http.StatusRequestHeaderFieldsTooLarge {
+		t.Fatalf("expected status 431, got %d", recorder.Code)
+	}
+	if introspections != 0 {
+		t.Fatalf("expected oversized authorization to skip introspection, got %d calls", introspections)
+	}
+}
+
+func TestStatelessMCPHTTPHandlerProvidesAccessToolWithoutAuthorization(t *testing.T) {
+	server := httptest.NewServer(newStatelessMCPHTTPHandler(&runtime.Runtime{}, nil, newTokenCache(nil)))
+	defer server.Close()
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             server.URL,
+		HTTPClient:           server.Client(),
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools.Tools) != 1 || !hasTool(tools.Tools, "get_s3m_access") {
+		t.Fatalf("expected only get_s3m_access, got %+v", toolNames(tools.Tools))
+	}
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_s3m_access"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected get_s3m_access to succeed, got %+v", result)
+	}
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(text.Text, "https://my.olcf.ornl.gov/") ||
+		!strings.Contains(text.Text, "scopes for the S3M services") ||
+		!strings.Contains(text.Text, `"mcpServers"`) ||
+		!strings.Contains(text.Text, "${S3M_TOKEN}") ||
+		!strings.Contains(text.Text, "[mcp_servers.s3m]") ||
+		!strings.Contains(text.Text, `env_http_headers = { Authorization = "S3M_TOKEN" }`) ||
+		!strings.Contains(text.Text, "~/.copilot/mcp-config.json") ||
+		!strings.Contains(text.Text, `"tools": ["*"]`) ||
+		!strings.Contains(text.Text, "claude|codex|copilot") {
+		t.Fatalf("unexpected access instructions: %q", text.Text)
+	}
+}
+
+func TestStatelessMCPHTTPHandlerProvidesAccessToolForUnusableToken(t *testing.T) {
 	file := slurmv0042pb.File_proto_slurm_v0042_slurm_proto
 	service := file.Services().ByName("SlurmIndirect")
 	method := service.Methods().ByName("GetJobs")
@@ -97,9 +173,8 @@ func TestStatelessMCPHTTPHandlerUsesBearerForVisibleDocs(t *testing.T) {
 		Desc:     "Get jobs",
 	}}
 
-	store := loadToolDocStore(t, methods, toolName, "Project {{project}}")
 	rt := &runtime.Runtime{Methods: methods}
-	rt.SetDocs(store)
+	rt.SetDocs(loadToolDocStore(t, methods, toolName, "Project {{project}}"))
 
 	cache := newTokenCache(rt)
 	cache.storeRecord("unknown-token", auth.TokenRecord{
@@ -133,8 +208,64 @@ func TestStatelessMCPHTTPHandlerUsesBearerForVisibleDocs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
+	if len(tools.Tools) != 1 || !hasTool(tools.Tools, "get_s3m_access") {
+		t.Fatalf("expected only get_s3m_access, got %+v", toolNames(tools.Tools))
+	}
+}
+
+func TestStatelessMCPHTTPHandlerUsesAuthorizationHeaderForVisibleDocs(t *testing.T) {
+	file := slurmv0042pb.File_proto_slurm_v0042_slurm_proto
+	service := file.Services().ByName("SlurmIndirect")
+	method := service.Methods().ByName("GetJobs")
+	toolName := proto.ToolNameForMethod(file, service, method)
+
+	methods := []proto.MethodInfo{{
+		File:     file,
+		Service:  service,
+		Method:   method,
+		ToolName: toolName,
+		Path:     "/jobs",
+		Desc:     "Get jobs",
+	}}
+
+	store := loadToolDocStore(t, methods, toolName, "Project {{project}}")
+	rt := &runtime.Runtime{Methods: methods}
+	rt.SetDocs(store)
+
+	cache := newTokenCache(rt)
+	cache.storeRecord("known-token", auth.TokenRecord{
+		Token:   "known-token",
+		Project: "proj-x",
+		Enclave: "enc",
+		Scopes:  []string{"*"},
+	})
+
+	server := httptest.NewServer(newStatelessMCPHTTPHandler(rt, nil, cache))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Transport = authHeaderRoundTripper{
+		base:  httpClient.Transport,
+		token: "known-token",
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             server.URL,
+		HTTPClient:           httpClient,
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
 	if !hasTool(tools.Tools, toolName) {
-		t.Fatalf("expected fail-open stateless surface to include %q, got %+v", toolName, toolNames(tools.Tools))
+		t.Fatalf("expected permitted stateless surface to include %q, got %+v", toolName, toolNames(tools.Tools))
 	}
 	if !hasTool(tools.Tools, "doc_lookup") {
 		t.Fatalf("expected doc_lookup to be exposed, got %+v", toolNames(tools.Tools))
@@ -230,7 +361,7 @@ type authHeaderRoundTripper struct {
 func (rt authHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	cloned := req.Clone(req.Context())
 	cloned.Header = req.Header.Clone()
-	cloned.Header.Set("Authorization", "Bearer "+rt.token)
+	cloned.Header.Set("Authorization", rt.token)
 
 	return rt.base.RoundTrip(cloned)
 }

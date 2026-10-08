@@ -190,6 +190,12 @@ func newStatelessMCPHTTPHandler(
 	})
 
 	requestHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.Header.Get("Authorization")) > maxAuthorizationHeaderBytes {
+			http.Error(w, "Authorization header too large", http.StatusRequestHeaderFieldsTooLarge)
+
+			return
+		}
+
 		if !validStatelessMCPRequest(w, r) {
 			return
 		}
@@ -199,8 +205,10 @@ func newStatelessMCPHTTPHandler(
 		streamableHandler.ServeHTTP(w, r.WithContext(ctx))
 	})
 
-	return wrapWithAuthTokenExtraction(requestHandler)
+	return requestHandler
 }
+
+const maxAuthorizationHeaderBytes = 16 << 10
 
 func buildStatelessMCPServer(
 	rt *runtime.Runtime,
@@ -212,15 +220,23 @@ func buildStatelessMCPServer(
 
 	logMCPServerFactory(r, token)
 
-	perms := cache.GetPermissions(r.Context(), token)
-	allowed := filterAllowed(perms, rt.Methods)
-
-	ts := buildToolSet(rt, allowed, conn, cache.Vars)
-
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "s3m",
 		Version: buildinfo.Version,
 	}, nil)
+
+	perms := cache.GetPermissions(r.Context(), token)
+	if !perms.Known {
+		for _, spec := range toolset.BuildUnauthenticatedToolSet().MCP {
+			srv.AddTool(spec.Tool, spec.Handler)
+		}
+
+		return srv
+	}
+
+	allowed := filterAllowed(perms, rt.Methods)
+
+	ts := buildToolSet(rt, allowed, conn, cache.Vars)
 
 	for _, spec := range ts.MCP {
 		originalHandler := spec.Handler

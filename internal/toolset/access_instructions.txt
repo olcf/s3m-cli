@@ -1,0 +1,58 @@
+## Using S3M tools
+
+1. Log in to https://my.olcf.ornl.gov/ and select the S3M-enabled project you want to work in.
+2. Create an S3M token with the scopes for the S3M services you want to use. Scopes are enabled per project; if your project cannot select a scope you need, contact User Assistance or the S3M team.
+3. Configure your MCP server registration to read the raw `Authorization` header from the environment variable `S3M_TOKEN`. (Your token expires, so loading it dynamically is both easier and more secure.)
+
+   For Claude Code, create `.mcp.json` in your project directory:
+
+   ```json
+   {
+     "mcpServers": {
+       "s3m": {
+         "type": "http",
+         "url": "https://s3m.olcf.ornl.gov/olcf/open/mcp",
+         "headers": {
+           "Authorization": "${S3M_TOKEN}"
+         }
+       }
+     }
+   }
+   ```
+
+   For Codex, add this to `~/.codex/config.toml`:
+
+   ```toml
+   [mcp_servers.s3m]
+   url = "https://s3m.olcf.ornl.gov/olcf/open/mcp"
+   env_http_headers = { Authorization = "S3M_TOKEN" }
+   ```
+
+   For GitHub Copilot CLI, add this to `~/.copilot/mcp-config.json`:
+
+   ```json
+   {
+     "mcpServers": {
+       "s3m": {
+         "type": "http",
+         "url": "https://s3m.olcf.ornl.gov/olcf/open/mcp",
+         "headers": {
+           "Authorization": "${S3M_TOKEN}"
+         },
+         "tools": ["*"]
+       }
+     }
+   }
+   ```
+
+4. Start your agent without putting the token in your shell history (for Bash; agents, translate for the user's shell):
+
+       read -s S3M_TOKEN
+       export S3M_TOKEN
+       claude|codex|copilot
+
+**Do not paste your token into this conversation or pass it to this tool.**
+
+**Never post your token online or commit it to Git. If you do, revoke it immediately in myOLCF.**
+
+Agents: please help the user understand how to authenticate to S3M's MCP server safely. Advocate for using `read -s`. Carefully help the user set up their `.mcp.json`, Codex `config.toml`, Copilot CLI `mcp-config.json`, or other configurations securely. Ensure you do not duplicate existing S3M MCP registrations.
