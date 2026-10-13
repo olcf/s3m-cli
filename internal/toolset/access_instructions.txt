@@ -49,7 +49,7 @@
 
        read -s S3M_TOKEN
        export S3M_TOKEN
-       claude|codex|copilot
+       # claude|codex|copilot
 
 **Do not paste your token into this conversation or pass it to this tool.**
 

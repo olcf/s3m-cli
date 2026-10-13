@@ -35,7 +35,8 @@ func BuildMCPCommand(rt *runtime.Runtime) *cli.Command {
 			Usage: "Use S3M token from Authorization header for MCP over HTTP and OpenAPI servers"},
 		&cli.BoolFlag{Name: "stdio",
 			Usage: "Also serve MCP over STDIO (default when --http is not set)"},
-	}, docFlags()...)
+	}, tokenValidationFlags()...)
+	flags = append(flags, docFlags()...)
 
 	return &cli.Command{
 		Name:  "mcp",
@@ -77,23 +78,7 @@ func BuildMCPCommand(rt *runtime.Runtime) *cli.Command {
 
 				defer closeConn(conn)
 
-				cache := newTokenCache(rt, conn)
-				handler := newStatelessMCPHTTPHandler(rt, conn, cache)
-
-				addr := c.String("http-addr")
-				slog.Info("listening for MCP HTTP (stateless, per-token filtering)", "addr", addr)
-
-				srv := &http.Server{
-					Addr:              addr,
-					Handler:           handler,
-					ReadHeaderTimeout: 10 * time.Second,
-					ReadTimeout:       30 * time.Second,
-					WriteTimeout:      30 * time.Second,
-					IdleTimeout:       60 * time.Second,
-				}
-
-				// no STDIO in stateless mode
-				return srv.ListenAndServe()
+				return serveStatelessMCPHTTP(rt, c, conn)
 			}
 
 			// Non-stateless mode: single shared server
@@ -161,6 +146,28 @@ func BuildMCPCommand(rt *runtime.Runtime) *cli.Command {
 	}
 }
 
+func serveStatelessMCPHTTP(rt *runtime.Runtime, c *cli.Command, conn *grpc.ClientConn) error {
+	cache, err := newConfiguredTokenCache(rt, c, conn)
+	if err != nil {
+		return err
+	}
+
+	handler := newStatelessMCPHTTPHandler(rt, conn, cache)
+	addr := c.String("http-addr")
+	slog.Info("listening for MCP HTTP (stateless, per-token filtering)", "addr", addr)
+
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
+	return srv.ListenAndServe()
+}
+
 func newStatelessMCPHTTPHandler(
 	rt *runtime.Runtime,
 	conn *grpc.ClientConn,
@@ -225,9 +232,14 @@ func buildStatelessMCPServer(
 		Version: buildinfo.Version,
 	}, nil)
 
-	perms := cache.GetPermissions(r.Context(), token)
+	perms, introspectionErr := cache.getPermissions(r.Context(), token)
 	if !perms.Known {
-		for _, spec := range toolset.BuildUnauthenticatedToolSet().MCP {
+		fallback := toolset.BuildUnauthenticatedToolSet()
+		if introspectionErr != nil {
+			fallback = toolset.BuildAuthenticationErrorToolSet()
+		}
+
+		for _, spec := range fallback.MCP {
 			srv.AddTool(spec.Tool, spec.Handler)
 		}
 
@@ -301,7 +313,8 @@ func BuildOpenAPICommand(rt *runtime.Runtime) *cli.Command {
 		&cli.StringFlag{Name: "addr", Value: cmd.DefaultOpenAPIAddr, Usage: "Address to bind"},
 		&cli.BoolFlag{Name: "stateless-auth",
 			Usage: "Use stateless auth: require S3M token from Authorization header and do not require a stored login"},
-	}, docFlags()...)
+	}, tokenValidationFlags()...)
+	flags = append(flags, docFlags()...)
 
 	return &cli.Command{
 		Name:  "openapi",
@@ -335,7 +348,11 @@ func BuildOpenAPICommand(rt *runtime.Runtime) *cli.Command {
 
 			defer closeConn(conn)
 
-			cache := newTokenCache(rt, conn)
+			cache, err := newConfiguredTokenCache(rt, c, conn)
+			if err != nil {
+				return err
+			}
+
 			ts := buildToolSet(rt, allowed, conn, cache.Vars)
 
 			mux := http.NewServeMux()
@@ -377,6 +394,43 @@ func BuildOpenAPICommand(rt *runtime.Runtime) *cli.Command {
 			}
 
 			return srv.ListenAndServe()
+		},
+	}
+}
+
+func newConfiguredTokenCache(
+	rt *runtime.Runtime,
+	c *cli.Command,
+	connections ...grpc.ClientConnInterface,
+) (*tokenCache, error) {
+	return newTokenCacheWithValidation(
+		rt,
+		c.String("stateless-token-regex"),
+		c.Int("stateless-token-min-length"),
+		c.Int("stateless-token-max-length"),
+		connections...,
+	)
+}
+
+func tokenValidationFlags() []cli.Flag {
+	return []cli.Flag{
+		&cli.StringFlag{
+			Name:    "stateless-token-regex",
+			Value:   defaultS3MJWTRegex,
+			Sources: cli.EnvVars("S3M_STATELESS_TOKEN_REGEX"),
+			Usage:   "Regular expression required for tokens before stateless introspection",
+		},
+		&cli.IntFlag{
+			Name:    "stateless-token-min-length",
+			Value:   defaultS3MTokenMinLength,
+			Sources: cli.EnvVars("S3M_STATELESS_TOKEN_MIN_LENGTH"),
+			Usage:   "Minimum token length allowed for stateless introspection",
+		},
+		&cli.IntFlag{
+			Name:    "stateless-token-max-length",
+			Value:   defaultS3MTokenMaxLength,
+			Sources: cli.EnvVars("S3M_STATELESS_TOKEN_MAX_LENGTH"),
+			Usage:   "Maximum token length allowed for stateless introspection",
 		},
 	}
 }

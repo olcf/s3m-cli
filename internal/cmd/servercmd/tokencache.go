@@ -4,7 +4,9 @@ import (
 	"container/list"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -26,6 +28,9 @@ type tokenCache struct {
 	cache      map[string]*tokenCacheEntry
 	order      *list.List
 	inflight   map[string]*tokenLookup
+	tokenRegex *regexp.Regexp
+	minLength  int
+	maxLength  int
 }
 
 type tokenCacheEntry struct {
@@ -38,18 +43,62 @@ type tokenLookup struct {
 	done   chan struct{}
 	record auth.TokenRecord
 	ok     bool
+	err    error
 }
 
 const tokenCacheTTL = 2 * time.Hour
 const tokenCacheMaxEntries = 2048
 
+const (
+	defaultS3MJWTRegex       = `^eyJh[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`
+	defaultS3MTokenMinLength = 300
+	defaultS3MTokenMaxLength = 4096
+)
+
 func newTokenCache(rt *runtime.Runtime, connections ...grpc.ClientConnInterface) *tokenCache {
+	cache, err := newTokenCacheWithValidation(
+		rt,
+		defaultS3MJWTRegex,
+		defaultS3MTokenMinLength,
+		defaultS3MTokenMaxLength,
+		connections...,
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	return cache
+}
+
+func newTokenCacheWithValidation(
+	rt *runtime.Runtime,
+	tokenRegex string,
+	minLength int,
+	maxLength int,
+	connections ...grpc.ClientConnInterface,
+) (*tokenCache, error) {
+	if minLength < 0 {
+		return nil, errors.New("S3M token minimum length must not be negative")
+	}
+
+	if maxLength < minLength {
+		return nil, errors.New("S3M token maximum length must be at least the minimum length")
+	}
+
+	compiledTokenRegex, err := regexp.Compile(tokenRegex)
+	if err != nil {
+		return nil, fmt.Errorf("compile S3M token regex: %w", err)
+	}
+
 	cache := &tokenCache{
 		rt:         rt,
 		introspect: introspectTokenRecord,
 		cache:      make(map[string]*tokenCacheEntry),
 		order:      list.New(),
 		inflight:   make(map[string]*tokenLookup),
+		tokenRegex: compiledTokenRegex,
+		minLength:  minLength,
+		maxLength:  maxLength,
 	}
 
 	if len(connections) > 0 && connections[0] != nil {
@@ -66,7 +115,7 @@ func newTokenCache(rt *runtime.Runtime, connections ...grpc.ClientConnInterface)
 		}
 	}
 
-	return cache
+	return cache, nil
 }
 
 func introspectTokenRecord(
@@ -121,12 +170,18 @@ func (c *tokenCache) GetRecord(ctx context.Context, token string) (auth.TokenRec
 
 // GetPermissions returns a permissions snapshot for the given token.
 func (c *tokenCache) GetPermissions(ctx context.Context, token string) permissions.Snapshot {
-	rec, ok := c.GetRecord(ctx, token)
+	perms, _ := c.getPermissions(ctx, token)
+
+	return perms
+}
+
+func (c *tokenCache) getPermissions(ctx context.Context, token string) (permissions.Snapshot, error) {
+	rec, ok, err := c.recordForTokenResult(ctx, token)
 	if !ok {
-		return permissions.New(nil, false)
+		return permissions.New(nil, false), err
 	}
 
-	return permissions.New(rec.Scopes, rec.IntrospectionOK())
+	return permissions.New(rec.Scopes, rec.IntrospectionOK()), nil
 }
 
 func (c *tokenCache) resolveRecord(ctx context.Context) (auth.TokenRecord, bool) {
@@ -143,12 +198,18 @@ func (c *tokenCache) resolveRecord(ctx context.Context) (auth.TokenRecord, bool)
 }
 
 func (c *tokenCache) recordForToken(ctx context.Context, token string) (auth.TokenRecord, bool) {
+	rec, ok, _ := c.recordForTokenResult(ctx, token)
+
+	return rec, ok
+}
+
+func (c *tokenCache) recordForTokenResult(ctx context.Context, token string) (auth.TokenRecord, bool, error) {
 	if token == "" {
-		return auth.TokenRecord{}, false
+		return auth.TokenRecord{}, false, nil
 	}
 
 	if cached, ok := c.loadCachedRecord(token); ok {
-		return cached, true
+		return cached, true, nil
 	}
 
 	c.mu.Lock()
@@ -157,9 +218,9 @@ func (c *tokenCache) recordForToken(ctx context.Context, token string) (auth.Tok
 
 		select {
 		case <-pending.done:
-			return pending.record, pending.ok
+			return pending.record, pending.ok, pending.err
 		case <-ctx.Done():
-			return auth.TokenRecord{}, false
+			return auth.TokenRecord{}, false, ctx.Err()
 		}
 	}
 
@@ -167,38 +228,49 @@ func (c *tokenCache) recordForToken(ctx context.Context, token string) (auth.Tok
 	c.inflight[token] = pending
 	c.mu.Unlock()
 
-	rec, ok := c.lookupToken(ctx, token)
+	rec, ok, err := c.lookupToken(ctx, token)
 
 	c.mu.Lock()
 	pending.record = rec
 	pending.ok = ok
+	pending.err = err
 
 	delete(c.inflight, token)
 	close(pending.done)
 	c.mu.Unlock()
 
-	return rec, ok
+	return rec, ok, err
 }
 
-func (c *tokenCache) lookupToken(ctx context.Context, token string) (auth.TokenRecord, bool) {
+func (c *tokenCache) lookupToken(ctx context.Context, token string) (auth.TokenRecord, bool, error) {
 	if cached, ok := c.loadCachedRecord(token); ok {
-		return cached, true
+		return cached, true, nil
 	}
 
 	if rec, ok := c.lookupStoredRecord(token); ok {
 		c.storeRecord(token, rec)
-		return rec, true
+		return rec, true, nil
+	}
+
+	if !c.looksLikeS3MToken(token) {
+		return auth.TokenRecord{}, false, nil
 	}
 
 	rec, err := c.introspectToken(ctx, token)
 	if err != nil {
 		slog.Debug("token introspection failed", "error", err)
-		return auth.TokenRecord{}, false
+		return auth.TokenRecord{}, false, err
 	}
 
 	c.storeRecord(token, rec)
 
-	return rec, true
+	return rec, true, nil
+}
+
+func (c *tokenCache) looksLikeS3MToken(token string) bool {
+	return len(token) >= c.minLength &&
+		len(token) <= c.maxLength &&
+		c.tokenRegex.MatchString(token)
 }
 
 func (c *tokenCache) loadCachedRecord(token string) (auth.TokenRecord, bool) {

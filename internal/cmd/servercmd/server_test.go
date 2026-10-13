@@ -22,6 +22,7 @@ import (
 func TestStatelessMCPHTTPHandlerBuildsServerOncePerRequest(t *testing.T) {
 	rt := &runtime.Runtime{}
 	cache := newTokenCache(rt)
+	token := testS3MToken()
 
 	var introspections int
 	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
@@ -32,7 +33,7 @@ func TestStatelessMCPHTTPHandlerBuildsServerOncePerRequest(t *testing.T) {
 
 	handler := newStatelessMCPHTTPHandler(rt, nil, cache)
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer invalid-token")
+	req.Header.Set("Authorization", token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 
@@ -153,8 +154,62 @@ func TestStatelessMCPHTTPHandlerProvidesAccessToolWithoutAuthorization(t *testin
 		!strings.Contains(text.Text, `env_http_headers = { Authorization = "S3M_TOKEN" }`) ||
 		!strings.Contains(text.Text, "~/.copilot/mcp-config.json") ||
 		!strings.Contains(text.Text, `"tools": ["*"]`) ||
-		!strings.Contains(text.Text, "claude|codex|copilot") {
+		!strings.Contains(text.Text, "# claude|codex|copilot") {
 		t.Fatalf("unexpected access instructions: %q", text.Text)
+	}
+}
+
+func TestStatelessMCPHTTPHandlerReportsAuthenticationError(t *testing.T) {
+	rt := &runtime.Runtime{}
+	cache := newTokenCache(rt)
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		return auth.TokenRecord{}, errors.New("unavailable")
+	}
+
+	server := httptest.NewServer(newStatelessMCPHTTPHandler(rt, nil, cache))
+	defer server.Close()
+
+	httpClient := server.Client()
+	httpClient.Transport = authHeaderRoundTripper{
+		base:  httpClient.Transport,
+		token: testS3MToken(),
+	}
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{
+		Endpoint:             server.URL,
+		HTTPClient:           httpClient,
+		DisableStandaloneSSE: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if len(tools.Tools) != 1 || !hasTool(tools.Tools, "get_s3m_access") {
+		t.Fatalf("expected only get_s3m_access, got %+v", toolNames(tools.Tools))
+	}
+	if tools.Tools[0].Title != "Resolve S3M Authentication" {
+		t.Fatalf("unexpected fallback title: %q", tools.Tools[0].Title)
+	}
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_s3m_access"})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	text, ok := result.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", result.Content[0])
+	}
+	if !strings.Contains(text.Text, "could not be validated") ||
+		!strings.Contains(text.Text, "temporarily unavailable") ||
+		strings.Contains(text.Text, `"mcpServers"`) {
+		t.Fatalf("unexpected authentication error instructions: %q", text.Text)
 	}
 }
 
@@ -346,6 +401,15 @@ func TestServerCommandsDefaultToPublicGitDocs(t *testing.T) {
 			if got := stringFlagDefault(t, cmd, "docs-path"); got != defaultDocsPath {
 				t.Fatalf("docs-path default = %q, want %q", got, defaultDocsPath)
 			}
+			if got := stringFlagDefault(t, cmd, "stateless-token-regex"); got != defaultS3MJWTRegex {
+				t.Fatalf("stateless-token-regex default = %q, want %q", got, defaultS3MJWTRegex)
+			}
+			if got := intFlagDefault(t, cmd, "stateless-token-min-length"); got != defaultS3MTokenMinLength {
+				t.Fatalf("stateless-token-min-length default = %d, want %d", got, defaultS3MTokenMinLength)
+			}
+			if got := intFlagDefault(t, cmd, "stateless-token-max-length"); got != defaultS3MTokenMaxLength {
+				t.Fatalf("stateless-token-max-length default = %d, want %d", got, defaultS3MTokenMaxLength)
+			}
 			if !hasFlag(cmd, "docs-token") || !hasFlag(cmd, "docs-poll") {
 				t.Fatalf("expected docs override flags on %s command", tt.name)
 			}
@@ -437,6 +501,19 @@ func stringFlagDefault(t *testing.T, cmd *cli.Command, name string) string {
 
 	t.Fatalf("string flag %q not found", name)
 	return ""
+}
+
+func intFlagDefault(t *testing.T, cmd *cli.Command, name string) int {
+	t.Helper()
+
+	for _, flag := range cmd.Flags {
+		if intFlag, ok := flag.(*cli.IntFlag); ok && intFlag.Name == name {
+			return intFlag.Value
+		}
+	}
+
+	t.Fatalf("int flag %q not found", name)
+	return 0
 }
 
 func hasFlag(cmd *cli.Command, name string) bool {
