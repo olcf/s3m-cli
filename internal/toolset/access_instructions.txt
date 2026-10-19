@@ -11,7 +11,7 @@
      "mcpServers": {
        "s3m": {
          "type": "http",
-         "url": "https://s3m.olcf.ornl.gov/olcf/open/mcp",
+         "url": "https://s3m.olcf.ornl.gov/olcf/mcp",
          "headers": {
            "Authorization": "${S3M_TOKEN}"
          }
@@ -24,7 +24,7 @@
 
    ```toml
    [mcp_servers.s3m]
-   url = "https://s3m.olcf.ornl.gov/olcf/open/mcp"
+   url = "https://s3m.olcf.ornl.gov/olcf/mcp"
    env_http_headers = { Authorization = "S3M_TOKEN" }
    ```
 
@@ -35,7 +35,7 @@
      "mcpServers": {
        "s3m": {
          "type": "http",
-         "url": "https://s3m.olcf.ornl.gov/olcf/open/mcp",
+         "url": "https://s3m.olcf.ornl.gov/olcf/mcp",
          "headers": {
            "Authorization": "${S3M_TOKEN}"
          },
