@@ -39,21 +39,6 @@ func truncateForLog(value string) string {
 	return sanitizeLogValue(value[:8]) + "..."
 }
 
-func logAuthTokenExtraction(r *http.Request, token string) {
-	slog.LogAttrs(r.Context(), slog.LevelDebug, "wrapWithAuthTokenExtraction",
-		safeStringAttr("method", r.Method),
-		safeStringAttr("path", r.URL.Path),
-		slog.Bool("hasToken", token != ""),
-		safeStringAttr("tokenPrefix", truncateForLog(token)),
-	)
-}
-
-func logMissingAuthorization(r *http.Request) {
-	slog.LogAttrs(r.Context(), slog.LevelWarn, "Rejecting request: missing Authorization header",
-		safeStringAttr("path", r.URL.Path),
-	)
-}
-
 func logMCPServerFactory(r *http.Request, token string) {
 	slog.LogAttrs(r.Context(), slog.LevelDebug, "MCP server factory called",
 		slog.Bool("hasToken", token != ""),

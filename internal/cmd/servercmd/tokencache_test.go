@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,6 +14,16 @@ import (
 	"github.com/olcf/s3m-cli/internal/permissions"
 	"github.com/olcf/s3m-cli/internal/runtime"
 )
+
+func testS3MToken() string {
+	return testS3MTokenWithLength(defaultS3MTokenMinLength)
+}
+
+func testS3MTokenWithLength(length int) string {
+	const fixed = "eyJh.a.a"
+
+	return "eyJh" + strings.Repeat("a", length-len(fixed)) + ".a.a"
+}
 
 func TestTokenCacheStoreAndLoad(t *testing.T) {
 	cache := newTokenCache(nil)
@@ -146,21 +157,33 @@ func TestGetPermissionsWithScopes(t *testing.T) {
 }
 
 func TestGetPermissionsUnknownToken(t *testing.T) {
-	cache := newTokenCache(nil)
+	rt := &runtime.Runtime{Target: "unused-target"}
+	cache := newTokenCache(rt)
+
+	var calls int
+	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
+		calls++
+
+		return auth.TokenRecord{}, nil
+	}
 
 	perms := cache.GetPermissions(context.Background(), "unknown-token")
 
 	if perms.Known {
 		t.Fatal("expected permissions to be unknown for missing token")
 	}
+	if calls != 0 {
+		t.Fatalf("expected malformed token to skip introspection, got %d calls", calls)
+	}
 }
 
 func TestGetPermissionsFallsBackToIntrospection(t *testing.T) {
 	rt := &runtime.Runtime{Target: "unused-target"}
 	cache := newTokenCache(rt)
+	token := testS3MToken()
 
 	introspected := auth.TokenRecord{
-		Token:   "unknown-token",
+		Token:   token,
 		Project: "proj",
 		Enclave: "enc",
 		Scopes:  []string{"/test.Service/*"},
@@ -176,14 +199,14 @@ func TestGetPermissionsFallsBackToIntrospection(t *testing.T) {
 		if gotRT != rt {
 			t.Fatal("expected introspection to receive the cache runtime")
 		}
-		if token != "unknown-token" {
-			t.Fatalf("expected token unknown-token, got %q", token)
+		if token != testS3MToken() {
+			t.Fatalf("expected plausible S3M token, got %q", token)
 		}
 
 		return introspected, nil
 	}
 
-	perms := cache.GetPermissions(context.Background(), "unknown-token")
+	perms := cache.GetPermissions(context.Background(), token)
 
 	if !perms.Known {
 		t.Fatal("expected introspected permissions to be known")
@@ -195,7 +218,7 @@ func TestGetPermissionsFallsBackToIntrospection(t *testing.T) {
 		t.Fatalf("expected one introspection call, got %d", calls)
 	}
 
-	perms = cache.GetPermissions(context.Background(), "unknown-token")
+	perms = cache.GetPermissions(context.Background(), token)
 
 	if !perms.Known {
 		t.Fatal("expected cached introspected permissions to stay known")
@@ -208,21 +231,26 @@ func TestGetPermissionsFallsBackToIntrospection(t *testing.T) {
 func TestGetPermissionsReturnsUnknownWhenIntrospectionFails(t *testing.T) {
 	rt := &runtime.Runtime{Target: "unused-target"}
 	cache := newTokenCache(rt)
+	wantErr := errors.New("boom")
 
 	cache.introspect = func(context.Context, *runtime.Runtime, string) (auth.TokenRecord, error) {
-		return auth.TokenRecord{}, errors.New("boom")
+		return auth.TokenRecord{}, wantErr
 	}
 
-	perms := cache.GetPermissions(context.Background(), "unknown-token")
+	perms, err := cache.getPermissions(context.Background(), testS3MToken())
 
 	if perms.Known {
 		t.Fatal("expected failed introspection to leave permissions unknown")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected introspection error %v, got %v", wantErr, err)
 	}
 }
 
 func TestTokenCacheCoalescesConcurrentIntrospection(t *testing.T) {
 	rt := &runtime.Runtime{Target: "unused-target"}
 	cache := newTokenCache(rt)
+	token := testS3MToken()
 
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -239,14 +267,14 @@ func TestTokenCacheCoalescesConcurrentIntrospection(t *testing.T) {
 
 		<-release
 
-		return auth.TokenRecord{Token: "shared-token", Scopes: []string{"/test/*"}}, nil
+		return auth.TokenRecord{Token: token, Scopes: []string{"/test/*"}}, nil
 	}
 
 	const goroutines = 8
 	results := make(chan permissions.Snapshot, goroutines)
 	for range goroutines {
 		go func() {
-			results <- cache.GetPermissions(context.Background(), "shared-token")
+			results <- cache.GetPermissions(context.Background(), token)
 		}()
 	}
 
@@ -264,6 +292,76 @@ func TestTokenCacheCoalescesConcurrentIntrospection(t *testing.T) {
 
 	if calls != 1 {
 		t.Fatalf("expected one concurrent introspection, got %d", calls)
+	}
+}
+
+func TestLooksLikeS3MToken(t *testing.T) {
+	cache := newTokenCache(nil)
+
+	tests := []struct {
+		name  string
+		token string
+		want  bool
+	}{
+		{name: "minimum length", token: testS3MToken(), want: true},
+		{name: "maximum length", token: testS3MTokenWithLength(defaultS3MTokenMaxLength), want: true},
+		{name: "too short", token: testS3MTokenWithLength(defaultS3MTokenMinLength - 1)},
+		{name: "too long", token: testS3MTokenWithLength(defaultS3MTokenMaxLength + 1)},
+		{name: "wrong prefix", token: "eyJb" + testS3MToken()[len("eyJh"):]},
+		{name: "missing segments", token: "eyJh" + strings.Repeat("a", defaultS3MTokenMinLength-len("eyJh"))},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := cache.looksLikeS3MToken(tt.token); got != tt.want {
+				t.Fatalf("looksLikeS3MToken() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenCacheUsesConfiguredTokenValidation(t *testing.T) {
+	cache, err := newTokenCacheWithValidation(nil, `^custom-[0-9]+$`, 8, 10)
+	if err != nil {
+		t.Fatalf("newTokenCacheWithValidation: %v", err)
+	}
+
+	tests := []struct {
+		token string
+		want  bool
+	}{
+		{token: "custom-1", want: true},
+		{token: "custom-123", want: true},
+		{token: "custom-", want: false},
+		{token: "custom-1234", want: false},
+		{token: "other-12", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := cache.looksLikeS3MToken(tt.token); got != tt.want {
+			t.Errorf("looksLikeS3MToken(%q) = %t, want %t", tt.token, got, tt.want)
+		}
+	}
+}
+
+func TestTokenCacheRejectsInvalidTokenValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		regex     string
+		minLength int
+		maxLength int
+	}{
+		{name: "invalid regex", regex: `[`, minLength: 1, maxLength: 2},
+		{name: "negative minimum", regex: `.`, minLength: -1, maxLength: 2},
+		{name: "maximum below minimum", regex: `.`, minLength: 2, maxLength: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := newTokenCacheWithValidation(nil, tt.regex, tt.minLength, tt.maxLength); err == nil {
+				t.Fatal("expected invalid token validation configuration to fail")
+			}
+		})
 	}
 }
 
